@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - celery-network
+
+  # MySQL Database
+  mysql:
+    image: mysql:8.0.42
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: celery_demo
+      MYSQL_USER: celery_user
+      MYSQL_PASSWORD: celery_pass
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    networks:
+      - celery-network
+
+  # Redis (用于存储任务结果)
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - celery-network
+
+  # FastAPI Web Application
+  web:
+    build: .
+    container_name: fastapi-web
+    ports:
+      - "8000:8000"
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin123@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=mysql+pymysql://celery_user:celery_pass@mysql:3306/celery_demo
+    depends_on:
+      - rabbitmq
+      - mysql
+      - redis
+    volumes:
+      - ./app:/app
+    networks:
+      - celery-network
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker
+  celery-worker:
+    build: .
+    container_name: celery-worker
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin123@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=mysql+pymysql://celery_user:celery_pass@mysql:3306/celery_demo
+    depends_on:
+      - rabbitmq
+      - mysql
+      - redis
+    volumes:
+      - ./app:/app
+    networks:
+      - celery-network
+    command: celery -A celery_app worker --loglevel=info --concurrency=4
+
+  # Flower (Celery监控工具)
+  flower:
+    build: .
+    container_name: flower
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin123@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - rabbitmq
+      - redis
+    volumes:
+      - ./app:/app
+    networks:
+      - celery-network
+    command: celery -A celery_app flower --port=5555
+
+volumes:
+  rabbitmq_data:
+  mysql_data:
+  redis_data:
+
+networks:
+  celery-network:
+    driver: bridge
