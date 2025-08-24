@@ -11,10 +11,12 @@ celery_rabbit_demo/
 ├── requirements.txt       # Python 依赖
 ├── init.sql              # MySQL 初始化脚本
 ├── start.sh              # 启动脚本
+├── test_chain.sh         # 责任链功能测试脚本
 └── app/
     ├── main.py           # FastAPI 主应用
     ├── celery_app.py     # Celery 配置
     ├── tasks.py          # 异步任务定义
+    ├── chain_handlers.py # 责任链设计模式实现
     └── database.py       # 数据库配置和模型
 ```
 
@@ -27,6 +29,7 @@ celery_rabbit_demo/
 - **MySQL**: 关系型数据库
 - **Flower**: Celery 监控工具
 - **Docker Compose**: 容器编排
+- **责任链模式**: 灵活的数据处理管道
 
 ## 📦 服务组件
 
@@ -100,6 +103,12 @@ docker-compose logs -f celery-worker
 - `POST /tasks/batch` - 提交批量处理任务
 - `POST /tasks/api-fetch` - 提交API数据获取任务
 
+### 责任链任务
+- `POST /chain/process` - 提交责任链处理任务
+- `POST /chain/batch` - 提交批量责任链任务
+- `POST /chain/dynamic` - 提交动态组装链任务
+- `POST /chain/demo` - 运行责任链演示
+
 ### 任务监控
 - `GET /tasks/{task_id}/status` - 获取任务状态
 - `GET /tasks/{task_id}/result` - 获取任务结果
@@ -150,6 +159,149 @@ curl -X POST "http://localhost:8000/tasks/api-fetch" \
 ```bash
 curl -X POST "http://localhost:8000/demo/run-concurrent-tasks"
 ```
+
+## 🔗 责任链设计模式
+
+本项目实现了完整的责任链设计模式，用于构建灵活的数据处理管道。
+
+### 📋 责任链特性
+
+- **单一职责**: 每个处理器只负责特定的处理逻辑
+- **松耦合**: 处理器之间相互独立，可以自由组合
+- **可扩展**: 可以轻松添加新的处理器类型
+- **动态配置**: 支持运行时动态组装处理链
+- **错误处理**: 每个处理器都有独立的错误处理
+- **进度跟踪**: 详细的处理日志和状态跟踪
+
+### 🔧 处理器类型
+
+1. **DataValidationHandler** - 数据验证
+   - 检查必填字段
+   - 验证数据类型
+   - 应用验证规则
+
+2. **DataTransformationHandler** - 数据转换
+   - 字符串处理 (大小写、去空格)
+   - 数据类型转换
+   - 数值计算
+
+3. **DataEnrichmentHandler** - 数据丰富化
+   - 添加元数据
+   - 推导新字段
+   - 地理位置信息
+
+4. **DataExportHandler** - 数据导出
+   - JSON/CSV/XML 格式导出
+   - 文件大小统计
+   - 导出位置记录
+
+5. **NotificationHandler** - 通知发送
+   - 邮件通知
+   - 发送状态跟踪
+   - 错误重试
+
+### 🎯 责任链演示
+
+#### 1. 基础数据验证链
+```bash
+curl -X POST "http://localhost:8000/chain/process" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_type": "data_validation",
+    "data": {
+      "payload": {
+        "name": "Alice Smith",
+        "age": 25,
+        "email": "alice@example.com"
+      },
+      "required_fields": ["name", "email"],
+      "validation_rules": {
+        "name": {"type": "string", "min_length": 2},
+        "age": {"type": "number"}
+      }
+    },
+    "chain_type": "validation_only"
+  }'
+```
+
+#### 2. 数据转换和导出链
+```bash
+curl -X POST "http://localhost:8000/chain/process" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_type": "data_transformation",
+    "data": {
+      "payload": {
+        "first_name": "  john  ",
+        "salary": "75000"
+      },
+      "transformations": {
+        "first_name": "strip",
+        "salary": "to_number"
+      },
+      "export_format": "json"
+    },
+    "chain_type": "transform_export"
+  }'
+```
+
+#### 3. 动态链组装
+```bash
+curl -X POST "http://localhost:8000/chain/dynamic" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_type": "data_transformation",
+    "data": {
+      "payload": {"message": "hello world"},
+      "transformations": {"message": "uppercase"},
+      "notification_type": "email",
+      "recipients": ["admin@example.com"]
+    },
+    "handler_sequence": ["transformation", "export", "notification"]
+  }'
+```
+
+#### 4. 批量责任链处理
+```bash
+curl -X POST "http://localhost:8000/chain/batch" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "batch_requests": [
+      {
+        "request_type": "data_validation",
+        "data": {
+          "payload": {"name": "User1", "email": "user1@example.com"},
+          "required_fields": ["name", "email"]
+        }
+      },
+      {
+        "request_type": "data_validation", 
+        "data": {
+          "payload": {"name": "User2", "email": "user2@example.com"},
+          "required_fields": ["name", "email"]
+        }
+      }
+    ],
+    "chain_type": "standard"
+  }'
+```
+
+#### 5. 责任链完整演示
+```bash
+# 运行所有类型的责任链演示
+curl -X POST "http://localhost:8000/chain/demo"
+
+# 或者使用专用测试脚本
+./test_chain.sh
+```
+
+### 🔄 链类型说明
+
+- **validation_only**: 仅数据验证
+- **transform_export**: 数据转换 + 导出
+- **enrich_notify**: 数据丰富化 + 通知
+- **standard**: 完整标准链 (验证 → 转换 → 丰富化 → 导出 → 通知)
+- **custom/dynamic**: 自定义处理器序列
 
 ## 📊 监控和调试
 

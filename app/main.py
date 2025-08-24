@@ -38,6 +38,23 @@ class LongTaskData(BaseModel):
     duration: int = 60
     task_name: str = "Long Running Task"
 
+# 责任链模式相关的 Pydantic 模型
+class ChainProcessingData(BaseModel):
+    request_type: str  # "data_validation", "data_transformation", etc.
+    data: dict
+    metadata: Optional[dict] = {}
+    chain_type: str = "standard"  # "standard", "validation_only", "transform_export", "enrich_notify"
+
+class BatchChainData(BaseModel):
+    batch_requests: List[dict]
+    chain_type: str = "standard"
+
+class DynamicChainData(BaseModel):
+    request_type: str
+    data: dict
+    metadata: Optional[dict] = {}
+    handler_sequence: List[str]  # ["validation", "transformation", "enrichment", "export", "notification"]
+
 @app.get("/")
 async def root():
     return {
@@ -51,6 +68,12 @@ async def root():
                 "submit_email_task": "/tasks/email",
                 "submit_batch_task": "/tasks/batch",
                 "submit_api_fetch_task": "/tasks/api-fetch"
+            },
+            "chain_tasks": {
+                "submit_chain_processing": "/chain/process",
+                "submit_batch_chain": "/chain/batch",
+                "submit_dynamic_chain": "/chain/dynamic",
+                "chain_demo": "/chain/demo"
             },
             "monitoring": {
                 "task_status": "/tasks/{task_id}/status",
@@ -300,5 +323,239 @@ async def run_concurrent_demo():
         "monitoring_urls": {
             "flower": "http://localhost:5555",
             "rabbitmq": "http://localhost:15672"
+        }
+    }
+
+
+# ===============================
+# 责任链模式任务端点
+# ===============================
+
+@app.post("/chain/process")
+async def submit_chain_processing(data: ChainProcessingData):
+    """提交责任链处理任务"""
+    request_data = {
+        'request_type': data.request_type,
+        'data': data.data,
+        'metadata': data.metadata
+    }
+    
+    task = tasks.chain_data_processing.delay(request_data, data.chain_type)
+    return {
+        "task_id": task.id,
+        "status": "submitted",
+        "message": f"责任链处理任务已提交，链类型: {data.chain_type}",
+        "request_type": data.request_type
+    }
+
+
+@app.post("/chain/batch")
+async def submit_batch_chain_processing(data: BatchChainData):
+    """提交批量责任链处理任务"""
+    task = tasks.batch_chain_processing.delay(data.batch_requests, data.chain_type)
+    return {
+        "task_id": task.id,
+        "status": "submitted",
+        "message": f"批量责任链处理任务已提交，共 {len(data.batch_requests)} 个请求",
+        "chain_type": data.chain_type,
+        "batch_size": len(data.batch_requests)
+    }
+
+
+@app.post("/chain/dynamic")
+async def submit_dynamic_chain_assembly(data: DynamicChainData):
+    """提交动态组装责任链任务"""
+    request_data = {
+        'request_type': data.request_type,
+        'data': data.data,
+        'metadata': data.metadata
+    }
+    
+    task = tasks.dynamic_chain_assembly.delay(request_data, data.handler_sequence)
+    return {
+        "task_id": task.id,
+        "status": "submitted",
+        "message": f"动态责任链任务已提交",
+        "handler_sequence": data.handler_sequence,
+        "handlers_count": len(data.handler_sequence)
+    }
+
+
+@app.post("/chain/demo")
+async def run_chain_demo():
+    """运行责任链演示，提交多种类型的链式处理任务"""
+    
+    tasks_submitted = []
+    
+    # 1. 数据验证任务
+    validation_data = {
+        'request_type': 'data_validation',
+        'data': {
+            'payload': {
+                'name': 'John Doe',
+                'age': 30,
+                'email': 'john.doe@example.com',
+                'country': 'USA'
+            },
+            'required_fields': ['name', 'email'],
+            'validation_rules': {
+                'name': {'type': 'string', 'min_length': 2},
+                'age': {'type': 'number'},
+                'email': {'type': 'string', 'min_length': 5}
+            }
+        },
+        'metadata': {'source': 'demo', 'version': '1.0'}
+    }
+    
+    validation_task = tasks.chain_data_processing.delay(validation_data, "validation_only")
+    tasks_submitted.append({
+        "type": "validation_chain",
+        "task_id": validation_task.id,
+        "description": "数据验证链"
+    })
+    
+    # 2. 数据转换任务
+    transformation_data = {
+        'request_type': 'data_transformation',
+        'data': {
+            'payload': {
+                'first_name': '  john  ',
+                'last_name': '  DOE  ',
+                'salary': '50000',
+                'department': 'ENGINEERING'
+            },
+            'transformations': {
+                'first_name': 'strip',
+                'last_name': 'strip',
+                'salary': 'to_number',
+                'department': 'lowercase'
+            }
+        }
+    }
+    
+    transform_task = tasks.chain_data_processing.delay(transformation_data, "transform_export")
+    tasks_submitted.append({
+        "type": "transformation_chain",
+        "task_id": transform_task.id,
+        "description": "数据转换和导出链"
+    })
+    
+    # 3. 数据丰富化和通知任务
+    enrichment_data = {
+        'request_type': 'data_enrichment',
+        'data': {
+            'payload': {
+                'first_name': 'Alice',
+                'last_name': 'Smith',
+                'age': 28,
+                'email': 'alice.smith@company.com',
+                'country': 'Germany'
+            }
+        }
+    }
+    
+    enrich_task = tasks.chain_data_processing.delay(enrichment_data, "enrich_notify")
+    tasks_submitted.append({
+        "type": "enrichment_chain",
+        "task_id": enrich_task.id,
+        "description": "数据丰富化和通知链"
+    })
+    
+    # 4. 完整标准链
+    standard_data = {
+        'request_type': 'data_validation',
+        'data': {
+            'payload': {
+                'user_id': 12345,
+                'name': 'Bob Johnson',
+                'age': 35,
+                'email': 'bob.johnson@email.com',
+                'country': 'Japan',
+                'department': 'Sales'
+            },
+            'required_fields': ['user_id', 'name', 'email'],
+            'validation_rules': {
+                'name': {'type': 'string', 'min_length': 2},
+                'age': {'type': 'number'},
+                'email': {'type': 'string'}
+            },
+            'transformations': {
+                'name': 'strip',
+                'department': 'lowercase'
+            },
+            'export_format': 'json'
+        }
+    }
+    
+    standard_task = tasks.chain_data_processing.delay(standard_data, "standard")
+    tasks_submitted.append({
+        "type": "standard_chain",
+        "task_id": standard_task.id,
+        "description": "完整标准处理链"
+    })
+    
+    # 5. 动态组装链
+    dynamic_data = {
+        'request_type': 'data_transformation',
+        'data': {
+            'payload': {
+                'message': 'Hello World',
+                'priority': 'high',
+                'recipients': ['admin@example.com', 'user@example.com']
+            },
+            'transformations': {
+                'message': 'uppercase',
+                'priority': 'lowercase'
+            },
+            'notification_type': 'email',
+            'recipients': ['admin@example.com', 'user@example.com']
+        }
+    }
+    
+    dynamic_task = tasks.dynamic_chain_assembly.delay(
+        dynamic_data, 
+        ['transformation', 'notification']
+    )
+    tasks_submitted.append({
+        "type": "dynamic_chain",
+        "task_id": dynamic_task.id,
+        "description": "动态组装链 (转换 + 通知)"
+    })
+    
+    # 6. 批量处理链
+    batch_requests = [
+        {
+            'request_type': 'data_validation',
+            'data': {
+                'payload': {'name': f'User{i}', 'email': f'user{i}@example.com'},
+                'required_fields': ['name', 'email']
+            }
+        }
+        for i in range(1, 4)
+    ]
+    
+    batch_task = tasks.batch_chain_processing.delay(batch_requests, "standard")
+    tasks_submitted.append({
+        "type": "batch_chain",
+        "task_id": batch_task.id,
+        "description": f"批量处理链 ({len(batch_requests)} 个请求)"
+    })
+    
+    return {
+        "message": "责任链演示任务已全部提交",
+        "total_tasks": len(tasks_submitted),
+        "tasks": tasks_submitted,
+        "chain_types_demonstrated": [
+            "validation_only", "transform_export", "enrich_notify", 
+            "standard", "dynamic", "batch"
+        ],
+        "monitoring_urls": {
+            "flower": "http://localhost:5555",
+            "rabbitmq": "http://localhost:15672"
+        },
+        "tips": {
+            "check_status": "使用 GET /tasks/{task_id}/status 查看任务状态",
+            "get_results": "使用 GET /tasks/{task_id}/result 获取处理结果",
+            "view_monitoring": "访问 Flower 界面查看实时处理进度"
         }
     }
